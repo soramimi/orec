@@ -1,0 +1,5 @@
+orec
+*.user
+*.out
+*.ll
+*.o
