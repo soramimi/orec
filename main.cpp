@@ -15,6 +15,8 @@
 #include <assert.h>
 #include <map>
 
+#pragma GCC diagnostic ignored "-Wswitch"
+
 using namespace llvm;
 
 // グローバルバイト列を作成
@@ -108,7 +110,7 @@ public:
 	}
 };
 
-class OreLang {
+class OreLangCompiler {
 private:
 	LLVMContext *llvmcx;
 	Module *module;
@@ -117,45 +119,40 @@ private:
 	DataLayout *data_layout;
 	Function *func_print_number;
 
-	class OreValue {
-	public:
-		Value *value = nullptr;
-	};
+	std::map<std::string, Value *> vars;
 
-	std::map<std::string, OreValue> vars;
-
-	bool getvar(std::string const &name, OreValue *result)
+	Value *getvar(std::string const &name)
 	{
 		auto it = vars.find(name);
 		if (it != vars.end()) {
-			*result = it->second;
-			return true;
+			return it->second;
 		}
 		throw VariableNotFound(name);
 	}
 
-	void eval(JSON::Node const &node, OreValue *result)
+	Value *eval(JSON::Node const &node)
 	{
-		assert(result);
 		switch (node.type) {
 		case JSON::Type::Array:
-			generate(node.children, 0, result);
-			break;
+			{
+				Value *v = nullptr;
+				generate(node.children, 0, &v);
+				return v;
+			}
 		case JSON::Type::String:
-			getvar(node.value, result);
-			break;
+			return getvar(node.value);
 		case JSON::Type::Number:
 		case JSON::Type::Boolean:
 			{
-				*result = OreValue();
 				double v =strtod(node.value.c_str(), nullptr);
-				result->value = ConstantInt::get(Type::getInt32Ty(*llvmcx), (uint32_t)v);
+				return ConstantInt::get(Type::getInt32Ty(*llvmcx), (uint32_t)v);
 			}
 			break;
 		}
+		return nullptr;
 	}
 
-	size_t generate(std::vector<JSON::Node> const &program, size_t position, OreValue *result = nullptr)
+	size_t generate(std::vector<JSON::Node> const &program, size_t position, Value **result = nullptr)
 	{
 		size_t pos = position;
 		while (pos < program.size()) {
@@ -174,26 +171,25 @@ private:
 						if (it == vars.end()) {
 							into = new AllocaInst(Type::getInt32Ty(*llvmcx), "", current_block);
 						} else {
-							into = it->second.value;
+							into = it->second;
 						}
 					}
-					OreValue v;
-					eval(program[2], &v);
-					if (into && v.value) {
+					Value *v = eval(program[2]);
+					if (into && v) {
 						Type *ty = Type::getInt32Ty(*llvmcx);
 						unsigned int align = data_layout->getABITypeAlignment(ty);
-						new StoreInst(v.value, into, false, align, current_block);
-						v.value = into;
+						new StoreInst(v, into, false, align, current_block);
+						v = into;
 					}
 					vars[name] = v;
 					pos += 3;
 				} else if (op == "get") {
 					assert(result);
 					if (program.size() != 2) throw ArgumentCountIncorrect();
-					eval(program[1], result);
-					if (result->value) {
-						if (isa<AllocaInst>(result->value)) {
-							result->value = new LoadInst(result->value, "", current_block);
+					*result = eval(program[1]);
+					if (*result) {
+						if (isa<AllocaInst>(*result)) {
+							*result = new LoadInst(*result, "", current_block);
 						}
 					}
 					pos += 2;
@@ -202,14 +198,14 @@ private:
 					BasicBlock *cond_block = BasicBlock::Create(*llvmcx,"", current_function); // 条件判定ブロック
 					BasicBlock *body_block = BasicBlock::Create(*llvmcx,"", current_function); // ループ本体ブロック
 					BasicBlock *exit_block = BasicBlock::Create(*llvmcx,"", current_function); // ループ終了ブロック
-					BranchInst *br1 = BranchInst::Create(cond_block, current_block);
+					BranchInst::Create(cond_block, current_block);
 
 					current_block = cond_block; // 条件判定ブロックを現在のブロックにする
 
-					OreValue cond;
+					Value *cond = nullptr;
 					generate(program[1].children, 0, &cond); // ループ条件を評価する
-					assert(cond.value);
-					BranchInst::Create(body_block, exit_block, cond.value, current_block); // trueならbodyへ、falseならexitへ
+					assert(cond);
+					BranchInst::Create(body_block, exit_block, cond, current_block); // trueならbodyへ、falseならexitへ
 
 					current_block = body_block; // ループ本体ブロックを現在のブロックにする
 
@@ -221,24 +217,21 @@ private:
 				} else if (op == "<=") {
 					assert(result);
 					if (program.size() != 3) throw ArgumentCountIncorrect();
-					OreValue lv, rv;
-					eval(program[1], &lv); // 左辺を評価
-					eval(program[2], &rv); // 右辺を評価
-					result->value = new ICmpInst(*current_block, ICmpInst::ICMP_SLE, lv.value, rv.value, "cond");
+					Value *lv = eval(program[1]); // 左辺を評価
+					Value *rv = eval(program[2]); // 右辺を評価
+					*result = new ICmpInst(*current_block, ICmpInst::ICMP_SLE, lv, rv, "cond");
 					pos += 3;
 				} else if (op == "+") {
 					assert(result);
 					if (program.size() != 3) throw ArgumentCountIncorrect();
-					OreValue lv, rv;
-					eval(program[1], &lv); // 左辺を評価
-					eval(program[2], &rv); // 右辺を評価
-					result->value = BinaryOperator::Create(BinaryOperator::Add, lv.value, rv.value, "", current_block);
+					Value *lv = eval(program[1]); // 左辺を評価
+					Value *rv = eval(program[2]); // 右辺を評価
+					*result = BinaryOperator::Create(BinaryOperator::Add, lv, rv, "", current_block);
 					pos += 3;
 				} else if (op == "print") {
 					if (program.size() != 2) throw ArgumentCountIncorrect();
-					OreValue v;
-					eval(program[1], &v); // 結果を取得
-					std::vector<Value *> args = { v.value };
+					Value *v = eval(program[1]); // 結果を取得
+					std::vector<Value *> args = { v };
 					CallInst::Create(func_print_number, args, "", current_block); // print_number関数を実行
 					pos += 2;
 				} else {
@@ -252,7 +245,7 @@ private:
 		return pos - position;
 	}
 public:
-	int run(JSON const &json)
+	std::string compile(JSON const &json)
 	{
 		llvmcx = &getGlobalContext();
 		module = new Module("ore", *llvmcx);
@@ -277,13 +270,11 @@ public:
 		module->print(o, nullptr);
 		o.flush();
 
-		fwrite(ll.c_str(), 1, ll.size(), stdout);
-
-		return 0;
+		return ll;
 	}
 };
 
-int main(int argc, char **argv)
+int main()
 {
 	static char const source[] =
 		"[\"step\","
@@ -299,8 +290,9 @@ int main(int argc, char **argv)
 		JSON json;
 		bool f = json.parse(source);
 		if (!f) throw SyntaxError();
-		OreLang orelang;
-		orelang.run(json);
+		OreLangCompiler orec;
+		std::string llvm_ir = orec.compile(json);
+		fwrite(llvm_ir.c_str(), 1, llvm_ir.size(), stdout);
 	} catch (Error &e) {
 		fprintf(stderr, "error: %s\n", e.message().c_str());
 	}

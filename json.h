@@ -5,7 +5,7 @@
 #include <vector>
 
 class JSON {
-	friend class OreLang;
+//	friend class OreLangCompiler;
 public:
 	enum class Type {
 		Unknown,
@@ -23,14 +23,14 @@ public:
 		std::string name;
 		std::string value;
 	};
-private:
+
 	class Node : public Value {
 	public:
 		std::vector<Node> children;
 	};
 
 	Node node;
-
+private:
 	static int scan_space(char const *ptr, char const *end);
 	static int parse_string(char const *begin, char const *end, std::string *out);
 	static int parse_name(char const *begin, char const *end, Node *node);
