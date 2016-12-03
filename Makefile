@@ -9,7 +9,7 @@ clean:
 	-rm orec
 	-rm *.o
 
-run:
+run: orec
 	./orec >test.ll
 	clang test.ll
 	./a.out

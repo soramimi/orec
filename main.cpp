@@ -1,5 +1,3 @@
-#include <stdio.h>
-#include <string>
 
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
@@ -11,58 +9,16 @@
 #include <llvm/IR/Constants.h>
 #include <llvm/Support/raw_os_ostream.h>
 
-#include "json.h"
 #include <assert.h>
+#include <stdio.h>
+#include <string>
 #include <map>
+
+#include "json.h"
 
 #pragma GCC diagnostic ignored "-Wswitch"
 
 using namespace llvm;
-
-// グローバルバイト列を作成
-Constant *createGlobalByteArrayPtr(Module *module, void const *p, size_t n)
-{
-	LLVMContext &cx = module->getContext();
-	Constant *str = ConstantDataArray::get(cx, ArrayRef<uint8_t>((uint8_t const *)p, n)); // 配列定数
-	GlobalVariable *gv = new GlobalVariable(*module, str->getType(), true, Function::ExternalLinkage, str); // グローバル変数
-	Value *i32zero = ConstantInt::get(Type::getInt32Ty(cx), 0); // 整数のゼロ
-	std::vector<Value *> zero2 = { i32zero, i32zero }; // ゼロふたつ
-	return ConstantExpr::getInBoundsGetElementPtr(gv, zero2); // 実体を指すポインタの定数オブジェクトにする
-	//return ConstantExpr::getInBoundsGetElementPtr(gv->getValueType(), gv, { i32zero, i32zero }); // LLVMのバージョンによってはこちら
-}
-
-// グローバル文字列を作成
-Constant *createGlobalStringPtr(Module *m, StringRef s)
-{
-	return createGlobalByteArrayPtr(m, s.data(), s.size() + 1); // ヌル文字を含めたバイト列を作成する
-}
-
-// print_number関数を作成
-Function *create_print_number_func(Module *module)
-{
-	LLVMContext &cx = module->getContext();
-
-	// printf関数を宣言
-	Function *fn_printf = Function::Create(FunctionType::get(Type::getInt32Ty(cx), { Type::getInt8PtrTy(cx) }, true), Function::ExternalLinkage, "printf", module);
-
-	// print_number関数を作成（戻り値なし、引数int）
-	Function *func = Function::Create(FunctionType::get(Type::getVoidTy(cx), { Type::getInt32Ty(cx) }, false), Function::ExternalLinkage, "print_number", module);
-	BasicBlock *block = BasicBlock::Create(cx, "entry", func);
-
-	Value *arg1 = &*func->arg_begin(); // 最初の引数
-
-	// printf関数を呼ぶ
-	std::string str = "%d\n";
-	Constant *arg0 = createGlobalStringPtr(module, str); // グローバル文字列を作成
-	std::vector<Value *>args = { arg0, arg1 };
-	CallInst::Create(fn_printf, args, "", block); // printf(arg0, arg1) 呼び出し
-
-	// return void
-	ReturnInst::Create(cx, block);
-
-	return func;
-}
-
 
 class Error {
 protected:
@@ -110,6 +66,14 @@ public:
 	}
 };
 
+class InternalError : public Error {
+public:
+	InternalError()
+	{
+		msg = "Internal error.";
+	}
+};
+
 class OreLangCompiler {
 private:
 	LLVMContext *llvmcx;
@@ -119,8 +83,53 @@ private:
 	DataLayout *data_layout;
 	Function *func_print_number;
 
-	std::map<std::string, Value *> vars;
+	std::map<std::string, Value *> vars; // 変数
 
+	// グローバルバイト列を作成
+	static Constant *createGlobalByteArrayPtr(Module *module, void const *p, size_t n)
+	{
+		LLVMContext &cx = module->getContext();
+		Constant *data = ConstantDataArray::get(cx, ArrayRef<uint8_t>((uint8_t const *)p, n)); // 配列定数
+		GlobalVariable *gv = new GlobalVariable(*module, data->getType(), true, Function::ExternalLinkage, data); // グローバル変数
+		Value *i32zero = ConstantInt::get(Type::getInt32Ty(cx), 0); // 整数のゼロ
+		std::vector<Value *> zero2 = { i32zero, i32zero }; // ゼロふたつ
+		return ConstantExpr::getInBoundsGetElementPtr(gv, zero2); // 実体を指すポインタの定数オブジェクトにする
+		//return ConstantExpr::getInBoundsGetElementPtr(gv->getValueType(), gv, { i32zero, i32zero }); // LLVMのバージョンによってはこちら
+	}
+
+	// グローバル文字列を作成
+	static Constant *createGlobalStringPtr(Module *module, StringRef str)
+	{
+		return createGlobalByteArrayPtr(module, str.data(), str.size() + 1); // ヌル文字を含めたバイト列を作成する
+	}
+
+	// print_number関数を作成
+	static Function *create_print_number_func(Module *module)
+	{
+		LLVMContext &cx = module->getContext();
+
+		// printf関数を宣言
+		Function *fn_printf = Function::Create(FunctionType::get(Type::getInt32Ty(cx), { Type::getInt8PtrTy(cx) }, true), Function::ExternalLinkage, "printf", module);
+
+		// print_number関数を作成（戻り値なし、引数int）
+		Function *func = Function::Create(FunctionType::get(Type::getVoidTy(cx), { Type::getInt32Ty(cx) }, false), Function::ExternalLinkage, "print_number", module);
+		BasicBlock *block = BasicBlock::Create(cx, "entry", func);
+
+		Value *arg1 = &*func->arg_begin(); // 最初の引数
+
+		// printf関数を呼ぶ
+		std::string str = "%d\n";
+		Constant *arg0 = createGlobalStringPtr(module, str); // グローバル文字列を作成
+		std::vector<Value *>args = { arg0, arg1 };
+		CallInst::Create(fn_printf, args, "", block); // printf(arg0, arg1) 呼び出し
+
+		// return void
+		ReturnInst::Create(cx, block);
+
+		return func;
+	}
+
+	// 変数を得る
 	Value *getvar(std::string const &name)
 	{
 		auto it = vars.find(name);
@@ -130,74 +139,84 @@ private:
 		throw VariableNotFound(name);
 	}
 
+	// 構文木を評価して値を得る
 	Value *eval(JSON::Node const &node)
 	{
 		switch (node.type) {
 		case JSON::Type::Array:
 			{
 				Value *v = nullptr;
-				generate(node.children, 0, &v);
+				generate(node.children, 0, &v); // 子を評価
 				return v;
 			}
 		case JSON::Type::String:
-			return getvar(node.value);
+			return getvar(node.value); // 変数を取得
 		case JSON::Type::Number:
 		case JSON::Type::Boolean:
 			{
-				double v =strtod(node.value.c_str(), nullptr);
-				return ConstantInt::get(Type::getInt32Ty(*llvmcx), (uint32_t)v);
+				unsigned long v = strtoul(node.value.c_str(), nullptr, 10); // 文字列から数値へ変換
+				return ConstantInt::get(Type::getInt32Ty(*llvmcx), (uint32_t)v); // 整数オブジェクトを作成
 			}
-			break;
 		}
 		return nullptr;
 	}
 
+	// コード生成
 	size_t generate(std::vector<JSON::Node> const &program, size_t position, Value **result = nullptr)
 	{
 		size_t pos = position;
 		while (pos < program.size()) {
 			JSON::Node const &node = program[pos];
-			if (node.type == JSON::Type::String) {
-				std::string op = node.value.c_str();
+			if (node.type == JSON::Type::Array) { // [...]
+				generate(node.children, 0); // 子を処理
+				pos++;
+			} else if (node.type == JSON::Type::String) {
+				if (pos != 0) {
+					// すべての命令が配列 [...] で独立している文法なのでposはゼロであるはず
+					throw SyntaxError();
+				}
+				std::string op = program[0].value;
 				if (op == "step") {
+					// 特に何もしないで先へ進める
 					pos++;
 					pos += generate(program, pos);
 				} else if (op == "set") {
 					if (program.size() != 3) throw ArgumentCountIncorrect();
-					std::string name = program[1].value;
-					Value *into = nullptr;
-					{
-						auto it = vars.find(name);
-						if (it == vars.end()) {
-							into = new AllocaInst(Type::getInt32Ty(*llvmcx), "", current_block);
-						} else {
-							into = it->second;
-						}
+
+					std::string name = program[1].value; // 変数名
+
+					Value *into; // 代入先変数
+					auto it = vars.find(name);
+					if (it == vars.end()) { // 見つからなければ
+						into = new AllocaInst(Type::getInt32Ty(*llvmcx), "", current_block); // 確保する
+					} else {
+						into = it->second; // 見つかった
+						if (!isa<AllocaInst>(into)) throw InternalError();
 					}
-					Value *v = eval(program[2]);
-					if (into && v) {
-						Type *ty = Type::getInt32Ty(*llvmcx);
-						unsigned int align = data_layout->getABITypeAlignment(ty);
-						new StoreInst(v, into, false, align, current_block);
-						v = into;
-					}
-					vars[name] = v;
+
+					Value *v = eval(program[2]); // 代入する値
+					if (!v) throw InternalError();
+
+					Type *ty = Type::getInt32Ty(*llvmcx);
+					unsigned int align = data_layout->getABITypeAlignment(ty);
+					new StoreInst(v, into, false, align, current_block); // 代入する
+
+					vars[name] = into; // 新しい値で更新する
 					pos += 3;
 				} else if (op == "get") {
 					assert(result);
 					if (program.size() != 2) throw ArgumentCountIncorrect();
-					*result = eval(program[1]);
-					if (*result) {
-						if (isa<AllocaInst>(*result)) {
-							*result = new LoadInst(*result, "", current_block);
-						}
-					}
+
+					*result = eval(program[1]); // 変数を取得
+					if (!isa<AllocaInst>(*result)) throw InternalError();
+
+					*result = new LoadInst(*result, "", current_block); // 変数の値を読み取る
 					pos += 2;
 				} else if (op == "while") {
 					if (program.size() != 3) throw ArgumentCountIncorrect();
-					BasicBlock *cond_block = BasicBlock::Create(*llvmcx,"", current_function); // 条件判定ブロック
-					BasicBlock *body_block = BasicBlock::Create(*llvmcx,"", current_function); // ループ本体ブロック
-					BasicBlock *exit_block = BasicBlock::Create(*llvmcx,"", current_function); // ループ終了ブロック
+					BasicBlock *cond_block = BasicBlock::Create(*llvmcx,"while.if", current_function); // 条件判定ブロック
+					BasicBlock *body_block = BasicBlock::Create(*llvmcx,"while.body", current_function); // ループ本体ブロック
+					BasicBlock *exit_block = BasicBlock::Create(*llvmcx,"while.exit", current_function); // ループ終了ブロック
 					BranchInst::Create(cond_block, current_block);
 
 					current_block = cond_block; // 条件判定ブロックを現在のブロックにする
@@ -226,7 +245,7 @@ private:
 					if (program.size() != 3) throw ArgumentCountIncorrect();
 					Value *lv = eval(program[1]); // 左辺を評価
 					Value *rv = eval(program[2]); // 右辺を評価
-					*result = BinaryOperator::Create(BinaryOperator::Add, lv, rv, "", current_block);
+					*result = BinaryOperator::Create(BinaryOperator::Add, lv, rv, "add", current_block);
 					pos += 3;
 				} else if (op == "print") {
 					if (program.size() != 2) throw ArgumentCountIncorrect();
@@ -237,9 +256,6 @@ private:
 				} else {
 					throw UnknownOperator(op);
 				}
-			} else if (node.type == JSON::Type::Array) { // [...]
-				generate(node.children, 0);
-				pos++;
 			}
 		}
 		return pos - position;
