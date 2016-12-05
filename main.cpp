@@ -216,22 +216,22 @@ private:
 					if (program.size() != 3) throw ArgumentCountIncorrect();
 					BasicBlock *cond_block = BasicBlock::Create(*llvmcx,"while.if", current_function); // 条件判定ブロック
 					BasicBlock *body_block = BasicBlock::Create(*llvmcx,"while.body", current_function); // ループ本体ブロック
-					BasicBlock *exit_block = BasicBlock::Create(*llvmcx,"while.exit", current_function); // ループ終了ブロック
 					BranchInst::Create(cond_block, current_block);
 
 					current_block = cond_block; // 条件判定ブロックを現在のブロックにする
-
 					Value *cond = nullptr;
 					generate(program[1].children, 0, &cond); // ループ条件を評価する
 					assert(cond);
-					BranchInst::Create(body_block, exit_block, cond, current_block); // trueならbodyへ、falseならexitへ
 
 					current_block = body_block; // ループ本体ブロックを現在のブロックにする
 
 					generate(program[2].children, 0); // ループ内のコード生成
-					BranchInst::Create(cond_block, current_block);
+					BranchInst::Create(cond_block, current_block); // 条件判定ブロックへ
 
-					current_block = exit_block; // ループ終了
+					current_block = BasicBlock::Create(*llvmcx,"while.exit", current_function); // ループ終了ブロック
+
+					BranchInst::Create(body_block, current_block, cond, cond_block); // 条件判定ブロックに分岐命令を追加
+
 					pos += 3;
 				} else if (op == "<=") {
 					assert(result);
@@ -293,6 +293,7 @@ public:
 int main()
 {
 	static char const source[] =
+#if 0
 		"[\"step\","
 		"  [\"set\", \"sum\", 0 ],"
 		"  [\"set\", \"i\", 1 ],"
@@ -301,7 +302,25 @@ int main()
 		"      [\"set\", \"sum\", [\"+\", [\"get\", \"sum\"], [\"get\", \"i\"]]],"
 		"      [\"set\", \"i\", [\"+\", [\"get\", \"i\"], 1]]]],"
 		"  [\"print\", [\"get\", \"sum\"]]]";
-
+#else
+			"[\"step\","
+			"  [\"set\", \"j\", 1 ],"
+			"  [\"while\", [\"<=\", [\"get\", \"j\"], 10],"
+			"    [\"step\","
+			"      [\"set\", \"sum\", 0 ],"
+			"      [\"set\", \"i\", 1 ],"
+			"      [\"while\", [\"<=\", [\"get\", \"i\"], [\"get\", \"j\"]],"
+			"        [\"step\","
+			"          [\"set\", \"sum\", [\"+\", [\"get\", \"sum\"], [\"get\", \"i\"]]],"
+			"          [\"set\", \"i\", [\"+\", [\"get\", \"i\"], 1]]"
+			"        ]"
+			"      ],"
+			"      [\"print\", [\"get\", \"sum\"]],"
+			"      [\"set\", \"j\", [\"+\", [\"get\", \"j\"], 1]]"
+			"    ]"
+			"  ]"
+			"]";
+#endif
 	try {
 		JSON json;
 		bool f = json.parse(source);
