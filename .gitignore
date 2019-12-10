@@ -3,3 +3,4 @@ orec
 *.out
 *.ll
 *.o
+test.*

@@ -20,7 +20,7 @@
 
 using namespace llvm;
 
-class Error {
+class OrecError {
 protected:
 	std::string msg;
 public:
@@ -30,7 +30,7 @@ public:
 	}
 };
 
-class SyntaxError : public Error {
+class SyntaxError : public OrecError {
 public:
 	SyntaxError()
 	{
@@ -38,7 +38,7 @@ public:
 	}
 };
 
-class UnknownOperator : public Error {
+class UnknownOperator : public OrecError {
 public:
 	UnknownOperator(std::string const &name)
 	{
@@ -48,7 +48,7 @@ public:
 	}
 };
 
-class ArgumentCountIncorrect : public Error {
+class ArgumentCountIncorrect : public OrecError {
 public:
 	ArgumentCountIncorrect()
 	{
@@ -56,7 +56,7 @@ public:
 	}
 };
 
-class VariableNotFound : public Error {
+class VariableNotFound : public OrecError {
 public:
 	VariableNotFound(std::string const &name)
 	{
@@ -66,7 +66,7 @@ public:
 	}
 };
 
-class InternalError : public Error {
+class InternalError : public OrecError {
 public:
 	InternalError()
 	{
@@ -76,7 +76,7 @@ public:
 
 class OreLangCompiler {
 private:
-	LLVMContext *llvmcx;
+	LLVMContext llvmcx;
 	Module *module;
 	Function *current_function;
 	BasicBlock *current_block;
@@ -92,9 +92,7 @@ private:
 		Constant *data = ConstantDataArray::get(cx, ArrayRef<uint8_t>((uint8_t const *)p, n)); // 配列定数
 		GlobalVariable *gv = new GlobalVariable(*module, data->getType(), true, Function::ExternalLinkage, data); // グローバル変数
 		Value *i32zero = ConstantInt::get(Type::getInt32Ty(cx), 0); // 整数のゼロ
-		std::vector<Value *> zero2 = { i32zero, i32zero }; // ゼロふたつ
-		return ConstantExpr::getInBoundsGetElementPtr(gv, zero2); // 実体を指すポインタの定数オブジェクトにする
-		//return ConstantExpr::getInBoundsGetElementPtr(gv->getValueType(), gv, { i32zero, i32zero }); // LLVMのバージョンによってはこちら
+		return ConstantExpr::getInBoundsGetElementPtr(gv->getValueType(), gv, { i32zero, i32zero });
 	}
 
 	// グローバル文字列を作成
@@ -155,7 +153,7 @@ private:
 		case JSON::Type::Boolean:
 			{
 				unsigned long v = strtoul(node.value.c_str(), nullptr, 10); // 文字列から数値へ変換
-				return ConstantInt::get(Type::getInt32Ty(*llvmcx), (uint32_t)v); // 整数オブジェクトを作成
+				return ConstantInt::get(Type::getInt32Ty(llvmcx), (uint32_t)v); // 整数オブジェクトを作成
 			}
 		}
 		return nullptr;
@@ -188,7 +186,7 @@ private:
 					Value *into; // 代入先変数
 					auto it = vars.find(name);
 					if (it == vars.end()) { // 見つからなければ
-						into = new AllocaInst(Type::getInt32Ty(*llvmcx), "", current_block); // 確保する
+						into = new AllocaInst(Type::getInt32Ty(llvmcx), "", current_block); // 確保する
 					} else {
 						into = it->second; // 見つかった
 						if (!isa<AllocaInst>(into)) throw InternalError();
@@ -197,7 +195,7 @@ private:
 					Value *v = eval(program[2]); // 代入する値
 					if (!v) throw InternalError();
 
-					Type *ty = Type::getInt32Ty(*llvmcx);
+					Type *ty = Type::getInt32Ty(llvmcx);
 					unsigned int align = data_layout->getABITypeAlignment(ty);
 					new StoreInst(v, into, false, align, current_block); // 代入する
 
@@ -214,8 +212,8 @@ private:
 					pos += 2;
 				} else if (op == "while") {
 					if (program.size() != 3) throw ArgumentCountIncorrect();
-					BasicBlock *cond_block = BasicBlock::Create(*llvmcx,"while.if", current_function); // 条件判定ブロック
-					BasicBlock *body_block = BasicBlock::Create(*llvmcx,"while.body", current_function); // ループ本体ブロック
+					BasicBlock *cond_block = BasicBlock::Create(llvmcx,"while.if", current_function); // 条件判定ブロック
+					BasicBlock *body_block = BasicBlock::Create(llvmcx,"while.body", current_function); // ループ本体ブロック
 					BranchInst::Create(cond_block, current_block);
 
 					current_block = cond_block; // 条件判定ブロックを現在のブロックにする
@@ -228,7 +226,7 @@ private:
 					generate(program[2].children, 0); // ループ内のコード生成
 					BranchInst::Create(cond_block, current_block); // 条件判定ブロックへ
 
-					current_block = BasicBlock::Create(*llvmcx,"while.exit", current_function); // ループ終了ブロック
+					current_block = BasicBlock::Create(llvmcx,"while.exit", current_function); // ループ終了ブロック
 
 					BranchInst::Create(body_block, current_block, cond, cond_block); // 条件判定ブロックに分岐命令を追加
 
@@ -263,22 +261,21 @@ private:
 public:
 	std::string compile(JSON const &json)
 	{
-		llvmcx = &getGlobalContext();
-		module = new Module("ore", *llvmcx);
+		module = new Module("ore", llvmcx);
 		DataLayout dl(module);
 		data_layout = &dl;
 
 		func_print_number = create_print_number_func(module);
 
 		// main関数を作成（戻り値int、引数なし）
-		current_function = Function::Create(FunctionType::get(Type::getInt32Ty(*llvmcx), false), GlobalVariable::ExternalLinkage, "main", module);
-		current_block = BasicBlock::Create(*llvmcx, "entry", current_function);
+		current_function = Function::Create(FunctionType::get(Type::getInt32Ty(llvmcx), false), GlobalVariable::ExternalLinkage, "main", module);
+		current_block = BasicBlock::Create(llvmcx, "entry", current_function);
 
 		// 関数の内容を構築
 		generate(json.node.children, 0);
 
 		// return 0
-		ReturnInst::Create(*llvmcx, ConstantInt::get(Type::getInt32Ty(*llvmcx), 0), current_block);
+		ReturnInst::Create(llvmcx, ConstantInt::get(Type::getInt32Ty(llvmcx), 0), current_block);
 
 		// LLVM IR を出力
 		std::string ll;
@@ -292,35 +289,16 @@ public:
 
 int main()
 {
-	static char const source[] =
-#if 0
-		"[\"step\","
-		"  [\"set\", \"sum\", 0 ],"
-		"  [\"set\", \"i\", 1 ],"
-		"  [\"while\", [\"<=\", [\"get\", \"i\"], 10],"
-		"    [\"step\","
-		"      [\"set\", \"sum\", [\"+\", [\"get\", \"sum\"], [\"get\", \"i\"]]],"
-		"      [\"set\", \"i\", [\"+\", [\"get\", \"i\"], 1]]]],"
-		"  [\"print\", [\"get\", \"sum\"]]]";
-#else
-			"[\"step\","
-			"  [\"set\", \"j\", 1 ],"
-			"  [\"while\", [\"<=\", [\"get\", \"j\"], 10],"
-			"    [\"step\","
-			"      [\"set\", \"sum\", 0 ],"
-			"      [\"set\", \"i\", 1 ],"
-			"      [\"while\", [\"<=\", [\"get\", \"i\"], [\"get\", \"j\"]],"
-			"        [\"step\","
-			"          [\"set\", \"sum\", [\"+\", [\"get\", \"sum\"], [\"get\", \"i\"]]],"
-			"          [\"set\", \"i\", [\"+\", [\"get\", \"i\"], 1]]"
-			"        ]"
-			"      ],"
-			"      [\"print\", [\"get\", \"sum\"]],"
-			"      [\"set\", \"j\", [\"+\", [\"get\", \"j\"], 1]]"
-			"    ]"
-			"  ]"
-			"]";
-#endif
+	static char const source[] = R"---(
+["step",
+  ["set", "sum", 0 ],
+  ["set", "i", 1 ],
+  ["while", ["<=", ["get", "i"], 10],
+	["step",
+	  ["set", "sum", ["+", ["get", "sum"], ["get", "i"]]],
+	  ["set", "i", ["+", ["get", "i"], 1]]]],
+  ["print", ["get", "sum"]]]
+)---";
 	try {
 		JSON json;
 		bool f = json.parse(source);
@@ -328,7 +306,7 @@ int main()
 		OreLangCompiler orec;
 		std::string llvm_ir = orec.compile(json);
 		fwrite(llvm_ir.c_str(), 1, llvm_ir.size(), stdout);
-	} catch (Error &e) {
+	} catch (OrecError &e) {
 		fprintf(stderr, "error: %s\n", e.message().c_str());
 	}
 
