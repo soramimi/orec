@@ -186,7 +186,7 @@ private:
 					Value *into; // 代入先変数
 					auto it = vars.find(name);
 					if (it == vars.end()) { // 見つからなければ
-						into = new AllocaInst(Type::getInt32Ty(llvmcx), "", current_block); // 確保する
+						into = new AllocaInst(Type::getInt32Ty(llvmcx), 0, "", current_block); // 確保する
 					} else {
 						into = it->second; // 見つかった
 						if (!isa<AllocaInst>(into)) throw InternalError();
